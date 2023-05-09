@@ -15,8 +15,10 @@ public class Controller {
     private ScreenLogger log;
     private HashMap<String, Socket> storeIndex = new HashMap<>();
     private Object storeIndexLock = new Object();
-    private HashMap<String, String> fileIndex = new HashMap<>();
+    private HashMap<String, Socket> fileIndex = new HashMap<>();
     private Object fileIndexLock = new Object();
+    private HashMap<String, String> pendingFiles = new HashMap<>();
+    private Object pendingFilesLock = new Object();
 
     /**
      * Controller Constructor
@@ -57,9 +59,7 @@ public class Controller {
             String outLine = "";
             synchronized (fileIndexLock) {
                 for (String file : fileIndex.keySet()) {
-                    if (!(fileIndex.get(file).equals("Storing") || fileIndex.get(file).equals("Removing"))) {
-                        outLine += file;
-                    }
+                    outLine += file;
                 }
             }
             out.println(outLine);
@@ -78,6 +78,11 @@ public class Controller {
         int storePoolSize;
         synchronized (storeIndexLock) {
             storePoolSize = storeIndex.size();
+            if (checkExistedFile(client, fileIndex.containsKey(file), file)) return;
+        }
+
+        synchronized (pendingFilesLock) {
+            if (checkExistedFile(client, pendingFiles.containsKey(file), file)) return;
         }
 
         // check if there are enough dstores
@@ -85,7 +90,7 @@ public class Controller {
             try {
                 PrintWriter out = new PrintWriter(client.getOutputStream(), true);
                 out.println(Protocol.ERROR_NOT_ENOUGH_DSTORES_TOKEN);
-
+                out.close();
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -94,7 +99,10 @@ public class Controller {
 
         // update file index
         synchronized (fileIndexLock) {
-            fileIndex.put(file, "Storing");
+            fileIndex.put(file, client);
+        }
+        synchronized (pendingFilesLock) {
+            pendingFiles.put(file, "0 " + replicFactor);
         }
 
         String[] portsArray;
@@ -115,6 +123,39 @@ public class Controller {
         }
     }
 
+    private Boolean checkExistedFile(Socket client, boolean b, String file) {
+        if (b) {
+            try {
+                PrintWriter out = new PrintWriter(client.getOutputStream(), true);
+                out.println(Protocol.ERROR_FILE_ALREADY_EXISTS_TOKEN);
+                out.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private void storeAck(String fileName, Socket client) {
+        synchronized (pendingFiles) {
+            if (pendingFiles.containsKey(fileName)) {
+                String[] pending = pendingFiles.get(fileName).split(" ");
+                int i = Integer.parseInt(pending[0]);
+                int r = Integer.parseInt(pending[1]);
+                i++;
+                if (i == r) {
+                    synchronized (fileIndexLock) {
+                        fileIndex.replace(fileName, "Stored");
+                    }
+                }
+                pendingFiles.remove(fileName);
+            } else {
+                log.error("File " + fileName + ": Non-pending file received ACK");
+            }
+        }
+    }
+
     public void start() {
         try {
             this.ss = new ServerSocket(port);
@@ -129,6 +170,7 @@ public class Controller {
                         case Protocol.JOIN_TOKEN -> storeJoin(args[1], client);
                         case Protocol.LIST_TOKEN -> listFiles(client);
                         case Protocol.STORE_TOKEN -> clientStore(args[1] ,client);
+                        case Protocol.STORE_ACK_TOKEN -> storeAck(args[1], client);
                         default -> {
                             log.error("Invalid command");
                             log.error(line);

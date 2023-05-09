@@ -9,22 +9,28 @@ public class DStore {
     private final int timeout;
     private final String folder;
     private ServerSocket ss;
+    private Socket controller;
     private ScreenLogger log = new ScreenLogger("DStore");
 
-    public DStore(int port, int cport, int timeout, String folder){
-        this.port = port;
-        this.cport = cport;
-        this.timeout = timeout;
-        this.folder = folder;
+  public DStore(int port, int cport, int timeout, String folder) {
+    this.port = port;
+    this.cport = cport;
+    this.timeout = timeout;
+    this.folder = folder;
+    try {
+      this.ss = new ServerSocket(port);
+      InetAddress address = InetAddress.getLocalHost();
+      this.controller = new Socket(address, cport);
+    } catch (IOException e) {
+      e.printStackTrace();
     }
+  }
 
     public void start() {
-        Socket socket = null;
         try {
-            InetAddress address = InetAddress.getLocalHost();
-            socket = new Socket(address, cport);
-            PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+            PrintWriter out = new PrintWriter(controller.getOutputStream(), true);
             out.println(Protocol.JOIN_TOKEN + " " + port);
+            out.close();
 
             while (true) {
                 Socket client = ss.accept();
@@ -57,6 +63,9 @@ public class DStore {
             fOut.write(buffer);
             fOut.close();
             out.close();
+
+            PrintWriter outS = new PrintWriter(controller.getOutputStream(), true);
+            outS.println(Protocol.STORE_ACK_TOKEN + " " + fileName);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }

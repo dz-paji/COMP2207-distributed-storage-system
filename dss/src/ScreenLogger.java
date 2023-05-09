@@ -29,4 +29,20 @@ public class ScreenLogger {
     public static void log(String message) {
         System.out.println(black + ": " + message + reset);
     }
+
+    public static void justInfo(String message) {
+        System.out.println(green + message + reset);
+    }
+
+    public static void justError(String message) {
+        System.err.println(red + message + reset);
+    }
+
+    public static void justDebug(String message) {
+        System.out.println(cyan + message + reset);
+    }
+
+    public static void justWarn(String message) {
+        System.out.println(yellow + message + reset);
+    }
 }
