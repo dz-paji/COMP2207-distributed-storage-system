@@ -15,10 +15,10 @@ public class Controller {
     private ScreenLogger log;
     private HashMap<String, Socket> storeIndex = new HashMap<>();
     private Object storeIndexLock = new Object();
-    private HashMap<String, Socket> fileIndex = new HashMap<>();
+    private HashMap<String, String> fileIndex = new HashMap<>();
     private Object fileIndexLock = new Object();
-    private HashMap<String, String> pendingFiles = new HashMap<>();
-    private Object pendingFilesLock = new Object();
+    private HashMap<String, Socket> fileClientIndex = new HashMap<>();
+    private Object fileClientLock = new Object();
 
     /**
      * Controller Constructor
@@ -59,9 +59,12 @@ public class Controller {
             String outLine = "";
             synchronized (fileIndexLock) {
                 for (String file : fileIndex.keySet()) {
-                    outLine += file;
+                    if (fileIndex.get(file).equals("Stored")) {
+                        outLine += file + " ";
+                    }
                 }
             }
+            if (outLine.length() > 0) outLine = outLine.substring(outLine.length() - 1, outLine.length());
             out.println(outLine);
             out.close();
         } catch (IOException e) {
@@ -75,16 +78,14 @@ public class Controller {
      * @param client - client socket
      */
     public void clientStore(String file, Socket client) {
-        int storePoolSize;
-        synchronized (storeIndexLock) {
-            storePoolSize = storeIndex.size();
+        synchronized (fileIndexLock) {
             if (checkExistedFile(client, fileIndex.containsKey(file), file)) return;
         }
 
-        synchronized (pendingFilesLock) {
-            if (checkExistedFile(client, pendingFiles.containsKey(file), file)) return;
+        int storePoolSize;
+        synchronized (storeIndexLock) {
+            storePoolSize = storeIndex.size();
         }
-
         // check if there are enough dstores
         if (storePoolSize < replicFactor) {
             try {
@@ -99,10 +100,10 @@ public class Controller {
 
         // update file index
         synchronized (fileIndexLock) {
-            fileIndex.put(file, client);
+            fileIndex.put(file, "Storing 0 " + replicFactor);
         }
-        synchronized (pendingFilesLock) {
-            pendingFiles.put(file, "0 " + replicFactor);
+        synchronized (fileClientLock) {
+            fileClientIndex.put(file, client);
         }
 
         String[] portsArray;
@@ -138,20 +139,34 @@ public class Controller {
     }
 
     private void storeAck(String fileName, Socket client) {
-        synchronized (pendingFiles) {
-            if (pendingFiles.containsKey(fileName)) {
-                String[] pending = pendingFiles.get(fileName).split(" ");
-                int i = Integer.parseInt(pending[0]);
-                int r = Integer.parseInt(pending[1]);
+        Boolean stored = false;
+        synchronized (fileIndexLock) {
+            if (fileIndex.containsKey(fileName) && fileIndex.get(fileName).startsWith("Storing")) {
+                String[] status = fileIndex.get(fileName).split(" ");
+                int i = Integer.parseInt(status[1]);
+                int r = Integer.parseInt(status[2]);
                 i++;
                 if (i == r) {
-                    synchronized (fileIndexLock) {
-                        fileIndex.replace(fileName, "Stored");
-                    }
+                    fileIndex.replace(fileName, "Stored");
+                    stored = true;
+                } else {
+                    fileIndex.replace(fileName, "Storing " + i + " " + r);
                 }
-                pendingFiles.remove(fileName);
             } else {
                 log.error("File " + fileName + ": Non-pending file received ACK");
+            }
+        }
+
+        if (stored) {
+            synchronized (fileClientLock) {
+                Socket clientSocket = fileClientIndex.get(fileName);
+                try {
+                    PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true);
+                    out.println(Protocol.STORE_COMPLETE_TOKEN);
+                    out.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
         }
     }
