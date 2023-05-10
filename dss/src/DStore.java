@@ -41,6 +41,7 @@ public class DStore {
                     switch (args[0]) {
                         case Protocol.STORE_TOKEN -> storeFile(args[1], args[2], client);
                         case Protocol.LOAD_DATA_TOKEN -> loadFile(args[1], client);
+                        case Protocol.REMOVE_TOKEN -> removeFile(args[1], client);
                         default -> {
                             log.error("Invalid command");
                             log.error(line);
@@ -52,6 +53,27 @@ public class DStore {
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    private void removeFile(String fileName, Socket client) {
+      log.info("Remove request received for " + fileName);
+        File file = new File(folder + "/" + fileName);
+        if (!file.exists()) {
+            log.error("File does not exist");
+            return;
+        }
+        if (file.delete()) {
+            log.info(fileName + " deleted.");
+            try {
+                PrintWriter out = new PrintWriter(client.getOutputStream(), true);
+                out.println(Protocol.REMOVE_ACK_TOKEN + " " + fileName);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        } else {
+            log.error(fileName + "delete failed.");
+        }
+
     }
 
     private void loadFile(String fileName, Socket client) {

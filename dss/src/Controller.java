@@ -4,7 +4,10 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
 
 public class Controller {
     private final int port;
@@ -179,6 +182,7 @@ public class Controller {
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
+                fileClientIndex.remove(fileName);
             }
         }
     }
@@ -242,7 +246,89 @@ public class Controller {
         }
     }
 
-    
+    /**
+     * Remove file from dstore
+     * @param fileName name of the file
+     * @param client client socket
+     */
+    private void clientRemove(String fileName, Socket client) {
+        log.info("REMOVE request received for " + fileName);
+        synchronized (fileIndexLock) {
+            if (!fileIndex.containsKey(fileName)) {
+                try {
+                    PrintWriter out = new PrintWriter(client.getOutputStream(), true);
+                    out.println(Protocol.ERROR_FILE_DOES_NOT_EXIST_TOKEN);
+                    out.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+                log.warn(fileName + ": File does not exist");
+                return;
+            }
+        }
+
+        int dstores = 0;
+        List<String> dstorePorts;
+        synchronized (fileStoreLock) {
+            dstores = fileStoreLookup.get(fileName).split(" ").length - 1;
+            dstorePorts = Arrays.stream(fileStoreLookup.get(fileName).split(" ")).toList();
+        }
+        dstorePorts.remove(0);
+        synchronized (fileIndexLock) {
+            if (fileIndex.get(fileName).startsWith("Stored")) {
+                fileIndex.replace(fileName, "Removing 0 " + dstores);
+            }
+        }
+
+        synchronized (fileClientLock) {
+            fileClientIndex.put(fileName, client);
+        }
+
+        synchronized (storeIndexLock) {
+            for (String port : dstorePorts) {
+                Socket dstore = storeIndex.get(port);
+                try {
+                    PrintWriter out = new PrintWriter(dstore.getOutputStream(), true);
+                    out.println(Protocol.REMOVE_TOKEN + " " + fileName);
+                    out.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
+    private void dstoreRmAck(String fileName) {
+        String[] status = null;
+        synchronized (fileIndexLock) {
+            if (fileIndex.get(fileName).startsWith("Removing")) {
+                status = fileIndex.get(fileName).split(" ");
+            } else {
+                log.error(fileName + ": Invalid state for remove ack");
+            }
+        }
+        int i = Integer.parseInt(status[1]);
+        int r = Integer.parseInt(status[2]);
+        i++;
+        if (i == r) {
+            fileIndex.remove(fileName);
+            synchronized (fileClientIndex) {
+                // Notify client
+                Socket client = fileClientIndex.get(fileName);
+                try {
+                    PrintWriter out = new PrintWriter(client.getOutputStream(), true);
+                    out.println(Protocol.REMOVE_COMPLETE_TOKEN);
+                    out.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+            log.info(fileName + ": Removed");
+        } else {
+            fileIndex.replace(fileName, "Removing " + i + " " + r);
+            log.info(fileName + ": " + i + "/" + r + " ACKs received");
+        }
+    }
 
     public void start() {
         try {
@@ -262,6 +348,7 @@ public class Controller {
                         case Protocol.LOAD_TOKEN -> clientLoad(args[1], client);
                         case Protocol.RELOAD_TOKEN -> clientLoad(args[1], client);
                         case Protocol.REMOVE_TOKEN -> clientRemove(args[1], client);
+                        case Protocol.REMOVE_ACK_TOKEN -> dstoreRmAck(args[1]);
                         default -> {
                             log.error("Invalid Token");
                             log.error(line);
