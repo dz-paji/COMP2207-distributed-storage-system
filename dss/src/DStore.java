@@ -40,6 +40,7 @@ public class DStore {
                     String[] args = line.split(" ");
                     switch (args[0]) {
                         case Protocol.STORE_TOKEN -> storeFile(args[1], args[2], client);
+                        case Protocol.LOAD_DATA_TOKEN -> loadFile(args[1], client);
                         default -> {
                             log.error("Invalid command");
                             log.error(line);
@@ -48,6 +49,25 @@ public class DStore {
                 }
             }
 
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void loadFile(String fileName, Socket client) {
+        try {
+            File file = new File(folder + "/" + fileName);
+            if (!file.exists()) {
+                client.close();
+                return;
+            }
+            PrintWriter out = new PrintWriter(client.getOutputStream(), true);
+            byte[] buffer = new byte[(int) file.length()];
+            FileInputStream fIn = new FileInputStream(file);
+            fIn.read(buffer);
+            fIn.close();
+            client.getOutputStream().write(buffer);
+            out.close();
         } catch (IOException e) {
             e.printStackTrace();
         }

@@ -199,24 +199,50 @@ public class Controller {
             }
         }
 
-        String ports = "";
-        synchronized (fileStoreLock) {
-            ports = fileStoreLookup.get(fileName).split(" ")[1];
+        int i = 0;
+        synchronized (fileIndexLock) {
+            if (fileIndex.get(fileName).startsWith("Stored")) {
+                fileIndex.replace(fileName, "Loading 0");
+            } else if (fileIndex.get(fileName).startsWith("Loading")) {
+                i = Integer.parseInt(fileIndex.get(fileName).split(" ")[1]);
+
+                // If no dstore to try
+                if (i == fileIndex.get(fileName).split(" ").length - 2) {
+                    try {
+                        PrintWriter out = new PrintWriter(client.getOutputStream(), true);
+                        out.println(Protocol.ERROR_LOAD_TOKEN);
+                        out.close();
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                    log.warn(fileName + ": No dstore to try");
+                    return;
+                }
+                i++;
+                fileIndex.replace(fileName, "Loading " + i);
+            } else {
+                log.error(fileName + ": Invalid state for loading");
+                return;
+            }
         }
 
-        if (ports.length() > 0) ports = ports.substring(0, ports.length() - 1);
+        String ports = "";
+        String fileSize = "";
+        synchronized (fileStoreLock) {
+            ports = fileStoreLookup.get(fileName).split(" ")[i + 1];
+            fileSize = fileStoreLookup.get(fileName).split(" ")[0];
+        }
+
         try {
             PrintWriter out = new PrintWriter(client.getOutputStream(), true);
-            out.println(Protocol.LOAD_FROM_TOKEN + " " + ports);
+            out.println(Protocol.LOAD_FROM_TOKEN + " " + ports + " " + fileSize);
             out.close();
         } catch (IOException e) {
             e.printStackTrace();
         }
-
-        synchronized (fileLoadLock) {
-            fileLoadLookup.put(fileName, ports);
-        }
     }
+
+    
 
     public void start() {
         try {
@@ -234,6 +260,8 @@ public class Controller {
                         case Protocol.STORE_TOKEN -> clientStore(args[1], args[2], client);
                         case Protocol.STORE_ACK_TOKEN -> storeAck(args[1]);
                         case Protocol.LOAD_TOKEN -> clientLoad(args[1], client);
+                        case Protocol.RELOAD_TOKEN -> clientLoad(args[1], client);
+                        case Protocol.REMOVE_TOKEN -> clientRemove(args[1], client);
                         default -> {
                             log.error("Invalid Token");
                             log.error(line);
