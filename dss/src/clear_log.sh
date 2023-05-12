@@ -1,0 +1,1 @@
+rm client_*.log
