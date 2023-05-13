@@ -6,7 +6,6 @@ import java.net.SocketException;
 
 public class DStore {
   private final int port;
-  private final int cport;
   private final int timeout;
   private final String folder;
   private ServerSocket ss;
@@ -15,7 +14,6 @@ public class DStore {
 
   public DStore(int port, int cport, int timeout, String folder) {
     this.port = port;
-    this.cport = cport;
     this.timeout = timeout;
     this.folder = folder;
     try {
