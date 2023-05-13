@@ -21,6 +21,8 @@ public class Controller implements Runnable {
   private final Object fileClientLock;
   private final HashMap<String, String> fileStoreLookup;
   private final Object fileStoreLock;
+  private final HashMap<String, String> fileLoadLookup;
+  private final Object fileLoadLock;
   public ServerSocket ss;
 
   /**
@@ -67,6 +69,8 @@ public class Controller implements Runnable {
     this.fileClientLock = fileClientLock;
     this.fileStoreLookup = fileStoreLookup;
     this.fileStoreLock = fileStoreLock;
+    this.fileLoadLookup = new HashMap<>();
+    this.fileLoadLock = new Object();
   }
 
   public Controller(int replicFactor, int timeout, int rebalance, int port) {
@@ -83,6 +87,8 @@ public class Controller implements Runnable {
     this.fileClientLock = new Object();
     this.fileStoreLookup = new HashMap<>();
     this.fileStoreLock = new Object();
+    this.fileLoadLookup = new HashMap<>();
+    this.fileLoadLock = new Object();
     try {
       ss = new ServerSocket(port);
       //            ss.setSoTimeout(timeout);
@@ -118,10 +124,10 @@ public class Controller implements Runnable {
         Iterator<Map.Entry<String, String>> iterator = fileIndex.entrySet().iterator();
         log.debug("Total of " + fileIndex.size() + " files stored");
         while (iterator.hasNext()) {
-            Map.Entry<String, String> entry = iterator.next();
-            if (entry.getValue().startsWith("Stored")) {
-                outLine.append(entry.getKey()).append(" ");
-            }
+          Map.Entry<String, String> entry = iterator.next();
+          if (entry.getValue().startsWith("Stored")) {
+            outLine.append(entry.getKey()).append(" ");
+          }
           log.debug(entry.getKey() + ": status " + entry.getValue());
         }
       }
@@ -149,7 +155,6 @@ public class Controller implements Runnable {
     int storePoolSize;
     synchronized (storeIndexLock) {
       storePoolSize = storeIndex.size();
-      log.debug(storePoolSize + " Dstores joined");
     }
     if (storePoolSize < replicFactor) {
       try {
@@ -158,8 +163,7 @@ public class Controller implements Runnable {
       } catch (IOException e) {
         e.printStackTrace();
       }
-      log.debug(storePoolSize + " Dstores joined");
-      log.warn(file + ": Insufficient dstore");
+      log.warn(file + ": Insufficient dstore. " + storePoolSize + " available, " + replicFactor + " required");
       return;
     }
 
@@ -214,7 +218,6 @@ public class Controller implements Runnable {
   private void storeAck(String fileName) {
     Boolean stored = false;
     synchronized (fileIndexLock) {
-      log.debug(fileName + ": " + String.valueOf(fileIndex.containsKey(fileName)) + "in fileIndex");
       if (fileIndex.containsKey(fileName) && fileIndex.get(fileName).startsWith("Storing")) {
         String[] status = fileIndex.get(fileName).split(" ");
         int i = Integer.parseInt(status[1]);
@@ -265,45 +268,42 @@ public class Controller implements Runnable {
     }
 
     int i = 0;
+    int r = numDstoresHasFile(fileName);
+    int fileSize = 0;
+    List<String> dstores = dstoresHasFile(fileName);
+
+    synchronized (fileStoreLock) {
+      fileSize = Integer.parseInt(fileStoreLookup.get(fileName).split(" ")[0]);
+    }
+
     synchronized (fileIndexLock) {
       if (fileIndex.get(fileName).startsWith("Stored")) {
-        fileIndex.replace(fileName, "Loading 0");
-      } else if (fileIndex.get(fileName).startsWith("Loading")) {
-        i = Integer.parseInt(fileIndex.get(fileName).split(" ")[1]);
-
-        // If no dstore to try
-        if (i == fileIndex.get(fileName).split(" ").length - 2) {
-          try {
-            PrintWriter out = new PrintWriter(client.getOutputStream(), true);
-            out.println(Protocol.ERROR_LOAD_TOKEN);
-
-          } catch (IOException e) {
-            e.printStackTrace();
+        synchronized (fileLoadLock) {
+          fileLoadLookup.putIfAbsent(fileName, "Loading 0 " + r);
+          i = Integer.parseInt(fileLoadLookup.get(fileName).split(" ")[1]);
+          i++;
+          if (i == r) { // check if there's more dstore to try
+            // no more dstore to try
+            try {
+              PrintWriter out = new PrintWriter(client.getOutputStream());
+              out.println(Protocol.ERROR_LOAD_TOKEN);
+            } catch (IOException e) {
+              e.printStackTrace();
+            }
+            fileLoadLookup.remove(fileName);
+          } else {
+            fileLoadLookup.replace(fileName, "Loading " + i + " " + r);
+            try {
+              PrintWriter out = new PrintWriter(client.getOutputStream());
+              out.println(Protocol.LOAD_FROM_TOKEN + " " + dstores.get(i - 1) + " " + fileSize);
+            } catch (IOException e) {
+              e.printStackTrace();
+            }
           }
-          log.warn(fileName + ": No dstore to try");
-          return;
         }
-        i++;
-        fileIndex.replace(fileName, "Loading " + i);
       } else {
         log.error(fileName + ": Invalid state for loading");
-        return;
       }
-    }
-
-    String ports = "";
-    String fileSize = "";
-    synchronized (fileStoreLock) {
-      ports = fileStoreLookup.get(fileName).split(" ")[i + 1];
-      fileSize = fileStoreLookup.get(fileName).split(" ")[0];
-    }
-
-    try {
-      PrintWriter out = new PrintWriter(client.getOutputStream(), true);
-      out.println(Protocol.LOAD_FROM_TOKEN + " " + ports + " " + fileSize);
-
-    } catch (IOException e) {
-      e.printStackTrace();
     }
   }
 
@@ -329,13 +329,8 @@ public class Controller implements Runnable {
       }
     }
 
-    int dstores = 0;
-    List<String> dstorePorts = new LinkedList<>();
-    synchronized (fileStoreLock) {
-      dstores = fileStoreLookup.get(fileName).split(" ").length - 1;
-      dstorePorts.addAll(Arrays.stream(fileStoreLookup.get(fileName).split(" ")).toList());
-      log.debug(fileName + " associates to: " + fileStoreLookup.get(fileName));
-    }
+    int dstores = numDstoresHasFile(fileName);
+    List<String> dstorePorts = dstoresHasFile(fileName);
 
     // remove size from ports list
     dstorePorts.remove(0);
@@ -363,6 +358,22 @@ public class Controller implements Runnable {
         }
       }
     }
+  }
+
+  private int numDstoresHasFile(String fileName) {
+    int dstores = 0;
+    synchronized (fileStoreLock) {
+      dstores = fileStoreLookup.get(fileName).split(" ").length - 1;
+    }
+    return dstores;
+  }
+
+  private List<String> dstoresHasFile(String fileName) {
+    List<String> dstorePorts = new LinkedList<>();
+    synchronized (fileStoreLock) {
+      dstorePorts.addAll(Arrays.stream(fileStoreLookup.get(fileName).split(" ")).toList());
+    }
+    return dstorePorts;
   }
 
   private void dstoreRmAck(String fileName) {

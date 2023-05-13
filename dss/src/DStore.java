@@ -2,6 +2,7 @@ import java.io.*;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
 
 public class DStore {
   private final int port;
@@ -31,25 +32,63 @@ public class DStore {
     try {
       PrintWriter out = new PrintWriter(controller.getOutputStream(), true);
       out.println(Protocol.JOIN_TOKEN + " " + port);
+      // Thread listening to controller
+      Thread c =
+          new Thread(
+              () -> {
+                try {
+                  BufferedReader in =
+                      new BufferedReader(new InputStreamReader(controller.getInputStream()));
+                  String line;
+                  while ((line = in.readLine()) != null) {
+                    String[] args = line.split(" ");
+                    switch (args[0]) {
+                      case Protocol.REMOVE_TOKEN -> removeFile(args[1], controller);
+                      default -> {
+                        log.error("Invalid command");
+                        log.error(line);
+                      }
+                    }
+                  }
+                } catch (IOException e) {
+                  e.printStackTrace();
+                }
+              });
+      c.start();
 
+      // Listen for clients
       while (true) {
         Socket client = ss.accept();
         BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
-        String line;
-        while ((line = in.readLine()) != null) {
-          String[] args = line.split(" ");
-          switch (args[0]) {
-            case Protocol.STORE_TOKEN -> storeFile(args[1], args[2], client);
-            case Protocol.LOAD_DATA_TOKEN -> loadFile(args[1], client);
-            case Protocol.REMOVE_TOKEN -> removeFile(args[1], client);
-            default -> {
-              log.error("Invalid command");
-              log.error(line);
-            }
-          }
-        }
-      }
 
+        Thread t =
+            new Thread(
+                () -> {
+                  String line;
+                  try {
+                    while ((line = in.readLine()) != null) {
+                      String[] args = line.split(" ");
+                      switch (args[0]) {
+                        case Protocol.STORE_TOKEN -> storeFile(args[1], args[2], client);
+                        case Protocol.LOAD_DATA_TOKEN -> loadFile(args[1], client);
+                        default -> {
+                          log.error("Invalid command");
+                          log.error(line);
+                        }
+                      }
+                    }
+                  } catch (SocketException e) {
+                    if (e.getMessage().equals("Socket closed")) {
+                      log.info("Client disconnected");
+                    } else {
+                      e.printStackTrace();
+                    }
+                  } catch (IOException e) {
+                    e.printStackTrace();
+                  }
+                });
+        t.start();
+      }
     } catch (IOException e) {
       e.printStackTrace();
     }
@@ -90,6 +129,7 @@ public class DStore {
       fIn.close();
       client.getOutputStream().write(buffer);
       log.info(fileName + ": sent to client");
+      client.close();
     } catch (IOException e) {
       e.printStackTrace();
     }
