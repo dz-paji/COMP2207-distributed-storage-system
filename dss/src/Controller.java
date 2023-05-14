@@ -261,7 +261,7 @@ public class Controller implements Runnable {
         } catch (IOException e) {
           e.printStackTrace();
         }
-        log.warn(fileName + ": File does not exist");
+        log.error(fileName + ": File does not exist");
         return;
       }
     }
@@ -270,16 +270,13 @@ public class Controller implements Runnable {
     int r = numDstoresHasFile(fileName);
     int fileSize = 0;
     List<String> dstores = dstoresHasFile(fileName);
-    log.debug(fileName + ": holds by " + dstores);
 
     synchronized (fileStoreLock) {
       fileSize = Integer.parseInt(fileStoreLookup.get(fileName).split(" ")[0]);
-      log.debug(fileName + ": File size is " + fileSize);
     }
 
     synchronized (fileIndexLock) {
       if (fileIndex.get(fileName).startsWith("Stored")) {
-        log.info(fileName + ": File is stored");
         synchronized (fileLoadLock) {
           if (fileLoadLookup.containsKey(fileName)) {
             i = Integer.parseInt(fileLoadLookup.get(fileName).split(" ")[1]);
@@ -293,7 +290,6 @@ public class Controller implements Runnable {
             try {
               PrintWriter out = new PrintWriter(client.getOutputStream(), true);
               out.println(Protocol.ERROR_LOAD_TOKEN);
-                log.warn(fileName + ": No more dstore to try");
             } catch (IOException e) {
               e.printStackTrace();
             }
@@ -307,7 +303,7 @@ public class Controller implements Runnable {
             } catch (IOException e) {
               e.printStackTrace();
             }
-            log.debug(fileName + ": " + Protocol.LOAD_FROM_TOKEN + " " + dstores.get(i) + " " + fileSize);
+            log.info(fileName + ": " + Protocol.LOAD_FROM_TOKEN + " token sent back");
           }
         }
       } else {

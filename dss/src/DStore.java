@@ -115,6 +115,7 @@ public class DStore {
   private void loadFile(String fileName, Socket client) {
     log.info("Load request received for " + fileName);
     try {
+      client.setSoTimeout(timeout);
       File file = new File(folder + "/" + fileName);
       if (!file.exists()) {
         log.warn(fileName + ": file not found");
@@ -135,6 +136,7 @@ public class DStore {
   private void storeFile(String fileName, String fileSize, Socket client) {
     log.info("Store request received for " + fileName);
     try {
+      client.setSoTimeout(timeout);
       PrintWriter out = new PrintWriter(client.getOutputStream(), true);
       out.println(Protocol.ACK_TOKEN);
       log.info("Ready for file " + fileName);
