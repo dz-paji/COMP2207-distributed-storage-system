@@ -258,7 +258,6 @@ public class Controller implements Runnable {
         try {
           PrintWriter out = new PrintWriter(client.getOutputStream(), true);
           out.println(Protocol.ERROR_FILE_DOES_NOT_EXIST_TOKEN);
-
         } catch (IOException e) {
           e.printStackTrace();
         }
@@ -271,34 +270,44 @@ public class Controller implements Runnable {
     int r = numDstoresHasFile(fileName);
     int fileSize = 0;
     List<String> dstores = dstoresHasFile(fileName);
+    log.debug(fileName + ": holds by " + dstores);
 
     synchronized (fileStoreLock) {
       fileSize = Integer.parseInt(fileStoreLookup.get(fileName).split(" ")[0]);
+      log.debug(fileName + ": File size is " + fileSize);
     }
 
     synchronized (fileIndexLock) {
       if (fileIndex.get(fileName).startsWith("Stored")) {
+        log.info(fileName + ": File is stored");
         synchronized (fileLoadLock) {
-          fileLoadLookup.putIfAbsent(fileName, "Loading 0 " + r);
-          i = Integer.parseInt(fileLoadLookup.get(fileName).split(" ")[1]);
-          i++;
+          if (fileLoadLookup.containsKey(fileName)) {
+            i = Integer.parseInt(fileLoadLookup.get(fileName).split(" ")[1]);
+            i++;
+          } else {
+            fileLoadLookup.putIfAbsent(fileName, "Loading 0 " + r);
+          }
+
           if (i == r) { // check if there's more dstore to try
             // no more dstore to try
             try {
-              PrintWriter out = new PrintWriter(client.getOutputStream());
+              PrintWriter out = new PrintWriter(client.getOutputStream(), true);
               out.println(Protocol.ERROR_LOAD_TOKEN);
+                log.warn(fileName + ": No more dstore to try");
             } catch (IOException e) {
               e.printStackTrace();
             }
             fileLoadLookup.remove(fileName);
+            log.error(fileName + ": Load failed. No more dstore to try");
           } else {
             fileLoadLookup.replace(fileName, "Loading " + i + " " + r);
             try {
-              PrintWriter out = new PrintWriter(client.getOutputStream());
-              out.println(Protocol.LOAD_FROM_TOKEN + " " + dstores.get(i - 1) + " " + fileSize);
+              PrintWriter out = new PrintWriter(client.getOutputStream(), true);
+              out.println(Protocol.LOAD_FROM_TOKEN + " " + dstores.get(i) + " " + fileSize);
             } catch (IOException e) {
               e.printStackTrace();
             }
+            log.debug(fileName + ": " + Protocol.LOAD_FROM_TOKEN + " " + dstores.get(i) + " " + fileSize);
           }
         }
       } else {
@@ -332,9 +341,6 @@ public class Controller implements Runnable {
     int dstores = numDstoresHasFile(fileName);
     List<String> dstorePorts = dstoresHasFile(fileName);
 
-    // remove size from ports list
-    dstorePorts.remove(0);
-    log.debug(dstores + " dstores holds the copy. They are: " + dstorePorts);
     synchronized (fileIndexLock) {
       if (fileIndex.get(fileName).startsWith("Stored")) {
         fileIndex.replace(fileName, "Removing 0 " + dstores);
@@ -347,12 +353,10 @@ public class Controller implements Runnable {
 
     synchronized (storeIndexLock) {
       for (String port : dstorePorts) {
-        log.debug("Obtaining socket of dstore: " + port);
         Socket dstore = storeIndex.get(port);
         try {
           PrintWriter out = new PrintWriter(dstore.getOutputStream(), true);
           out.println(Protocol.REMOVE_TOKEN + " " + fileName);
-          log.debug("REMOVE request sent to dstore " + port);
         } catch (IOException e) {
           e.printStackTrace();
         }
@@ -373,6 +377,7 @@ public class Controller implements Runnable {
     synchronized (fileStoreLock) {
       dstorePorts.addAll(Arrays.stream(fileStoreLookup.get(fileName).split(" ")).toList());
     }
+    dstorePorts.remove(0);
     return dstorePorts;
   }
 
@@ -457,8 +462,7 @@ public class Controller implements Runnable {
                         case Protocol.LIST_TOKEN -> listFiles(client);
                         case Protocol.STORE_TOKEN -> clientStore(args[1], args[2], client);
                         case Protocol.STORE_ACK_TOKEN -> storeAck(args[1]);
-                        case Protocol.LOAD_TOKEN -> clientLoad(args[1], client);
-                        case Protocol.RELOAD_TOKEN -> clientLoad(args[1], client);
+                        case Protocol.LOAD_TOKEN, Protocol.RELOAD_TOKEN -> clientLoad(args[1], client);
                         case Protocol.REMOVE_TOKEN -> clientRemove(args[1], client);
                         case Protocol.REMOVE_ACK_TOKEN -> dstoreRmAck(args[1]);
                         default -> {

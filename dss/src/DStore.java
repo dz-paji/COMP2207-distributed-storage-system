@@ -43,7 +43,7 @@ public class DStore {
                     switch (args[0]) {
                       case Protocol.REMOVE_TOKEN -> removeFile(args[1], controller);
                       default -> {
-                        log.error("Invalid command");
+                        log.error("Invalid command from controller");
                         log.error(line);
                       }
                     }
@@ -70,7 +70,7 @@ public class DStore {
                         case Protocol.STORE_TOKEN -> storeFile(args[1], args[2], client);
                         case Protocol.LOAD_DATA_TOKEN -> loadFile(args[1], client);
                         default -> {
-                          log.error("Invalid command");
+                          log.error("Invalid command from client");
                           log.error(line);
                         }
                       }
@@ -127,7 +127,6 @@ public class DStore {
       fIn.close();
       client.getOutputStream().write(buffer);
       log.info(fileName + ": sent to client");
-      client.close();
     } catch (IOException e) {
       e.printStackTrace();
     }
