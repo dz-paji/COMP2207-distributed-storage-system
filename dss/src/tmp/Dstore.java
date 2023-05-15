@@ -4,7 +4,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
 
-public class DStore {
+public class Dstore {
   private final int port;
   private final int timeout;
   private final String folder;
@@ -12,7 +12,7 @@ public class DStore {
   private Socket controller;
   private ScreenLogger log = new ScreenLogger("DStore");
 
-  public DStore(int port, int cport, int timeout, String folder) {
+  public Dstore(int port, int cport, int timeout, String folder) {
     this.port = port;
     this.timeout = timeout;
     this.folder = folder;
@@ -161,7 +161,7 @@ public class DStore {
     String folder = args[3];
     File dir = new File(folder);
     dir.mkdir();
-    DStore dstore = new DStore(port, cport, timeout, folder);
+    Dstore dstore = new Dstore(port, cport, timeout, folder);
     dstore.start();
     ScreenLogger.log("DStore started");
   }
