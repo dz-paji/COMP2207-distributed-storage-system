@@ -190,14 +190,30 @@ public class Controller {
     }
     if (isComplete) {
       log.debug("All dstore acks received for " + file);
-      synchronized (fileStoreLock) {
-        fileStoreLookup.putIfAbsent(file, fileSize + " " + ports);
-      }
+      registerFile(ports.toString(), file, fileSize);
     } else {
       log.warn("Timeout while waiting for dstore acks of " + file);
-        synchronized (fileIndexLock) {
-            fileIndex.remove(file);
-        }
+      synchronized (fileIndexLock) {
+        fileIndex.remove(file);
+      }
+    }
+  }
+
+  private void registerFile(String ports, String fileName, String fileSize) {
+    synchronized (fileStoreLock) {
+      fileStoreLookup.put(fileName, fileSize + " " + ports);
+    }
+    synchronized (fileClientLock) {
+      try {
+        Socket clientSocket = fileClientIndex.get(fileName);
+
+        PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true);
+        out.println(Protocol.STORE_COMPLETE_TOKEN);
+
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+      fileClientIndex.remove(fileName);
     }
   }
 
@@ -255,31 +271,23 @@ public class Controller {
     }
 
     if (doCountdown) {
-      CountDownLatch latch;
       synchronized (fileCountdownLock) {
-        latch = fileCountdown.get(fileName);
-      }
-      latch.countDown();
-    }
-
-    if (stored) {
-      synchronized (fileClientLock) {
-        try {
-          Socket clientSocket = fileClientIndex.get(fileName);
-
-          PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true);
-          out.println(Protocol.STORE_COMPLETE_TOKEN);
-
-        } catch (IOException e) {
-          e.printStackTrace();
-        }
-        fileClientIndex.remove(fileName);
+        fileCountdown.get(fileName).countDown();
       }
     }
+
   }
 
-  private void clientLoad(String fileName, Socket client) {
-    log.info("LOAD request received for " + fileName);
+  private void clientLoad(String fileName, Socket client, boolean isFresh) {
+    if (isFresh) {
+      log.info("LOAD request received for " + fileName);
+      synchronized (fileLoadLock) {
+        fileLoadLookup.remove(fileName);
+      }
+    } else {
+      log.info("RELOAD request received for " + fileName);
+    }
+
     synchronized (fileIndexLock) {
       if (!fileIndex.containsKey(fileName)) {
         try {
@@ -330,14 +338,28 @@ public class Controller {
 
         if (i == r) { // check if there's more dstore to try
           // no more dstore to try
-          try {
-            PrintWriter out = new PrintWriter(client.getOutputStream(), true);
-            out.println(Protocol.ERROR_LOAD_TOKEN);
-          } catch (IOException e) {
-            e.printStackTrace();
+
+          if (isFresh) { // this is a fresh serve
+            fileLoadLookup.replace(fileName, "Loading 1 " + r);
+            try {
+              PrintWriter out = new PrintWriter(client.getOutputStream(), true);
+              out.println(Protocol.LOAD_FROM_TOKEN + " " + dstores.get(0) + " " + fileSize);
+            } catch (IOException e) {
+              e.printStackTrace();
+            }
+            log.info(fileName + ": " + Protocol.LOAD_FROM_TOKEN + " token sent back");
+            log.debug("LOAD FROM token served. Note: A fresh serve with Loading record uncleared. Is this a concurrency situation?");
+          } else {
+            // genuinely no more dstore to try
+            try {
+              PrintWriter out = new PrintWriter(client.getOutputStream(), true);
+              out.println(Protocol.ERROR_LOAD_TOKEN);
+            } catch (IOException e) {
+              e.printStackTrace();
+            }
+            fileLoadLookup.remove(fileName);
+            log.error(fileName + ": Load failed. No more dstore to try");
           }
-          fileLoadLookup.remove(fileName);
-          log.error(fileName + ": Load failed. No more dstore to try");
         } else {
           fileLoadLookup.replace(fileName, "Loading " + i + " " + r);
           try {
@@ -347,7 +369,8 @@ public class Controller {
             e.printStackTrace();
           }
           log.info(fileName + ": " + Protocol.LOAD_FROM_TOKEN + " token sent back");
-          log.debug("whole token is " + Protocol.LOAD_FROM_TOKEN + " " + dstores.get(i) + " " + fileSize);
+          log.debug(
+              "whole token is " + Protocol.LOAD_FROM_TOKEN + " " + dstores.get(i) + " " + fileSize);
         }
       }
     }
@@ -471,8 +494,8 @@ public class Controller {
                         case Protocol.LIST_TOKEN -> listFiles(client);
                         case Protocol.STORE_TOKEN -> clientStore(args[1], args[2], client);
                         case Protocol.STORE_ACK_TOKEN -> storeAck(args[1]);
-                        case Protocol.LOAD_TOKEN, Protocol.RELOAD_TOKEN -> clientLoad(
-                            args[1], client);
+                        case Protocol.LOAD_TOKEN -> clientLoad(args[1], client, true);
+                        case Protocol.RELOAD_TOKEN -> clientLoad(args[1], client, false);
                         case Protocol.REMOVE_TOKEN -> clientRemove(args[1], client);
                         case Protocol.REMOVE_ACK_TOKEN -> dstoreRmAck(args[1]);
                         default -> {
