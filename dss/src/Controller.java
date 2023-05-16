@@ -29,7 +29,7 @@ public class Controller {
   private final HashMap<String, CountDownLatch> fileCountdown;
   private final Object fileCountdownLock;
   private final HashMap<String, CountDownLatch> removeCountdown;
-    private final Object removeCountdownLock;
+  private final Object removeCountdownLock;
   public ServerSocket ss;
 
   public Controller(int replicFactor, int timeout, int rebalance, int port) {
@@ -279,7 +279,6 @@ public class Controller {
         fileCountdown.get(fileName).countDown();
       }
     }
-
   }
 
   private void clientLoad(String fileName, Socket client, boolean isFresh) {
@@ -290,6 +289,21 @@ public class Controller {
       }
     } else {
       log.info("RELOAD request received for " + fileName);
+    }
+
+    int dstoreSize;
+    synchronized (storeIndexLock) {
+      dstoreSize = storeIndex.size();
+    }
+    if (dstoreSize == 0) {
+      log.error("No dstore joined");
+      try {
+        PrintWriter out = new PrintWriter(client.getOutputStream(), true);
+        out.println(Protocol.ERROR_NOT_ENOUGH_DSTORES_TOKEN);
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+      return;
     }
 
     synchronized (fileIndexLock) {
@@ -352,7 +366,8 @@ public class Controller {
               e.printStackTrace();
             }
             log.info(fileName + ": " + Protocol.LOAD_FROM_TOKEN + " token sent back");
-            log.debug("LOAD FROM token served. Note: A fresh serve with Loading record uncleared. Is this a concurrency situation?");
+            log.debug(
+                "LOAD FROM token served. Note: A fresh serve with Loading record uncleared. Is this a concurrency situation?");
           } else {
             // genuinely no more dstore to try
             try {
@@ -388,6 +403,22 @@ public class Controller {
    */
   private void clientRemove(String fileName, Socket client) {
     log.info("REMOVE request received for " + fileName);
+
+    int dstoreSize;
+    synchronized (storeIndexLock) {
+      dstoreSize = storeIndex.size();
+    }
+    if (dstoreSize == 0) {
+      log.error("No dstore joined");
+      try {
+        PrintWriter out = new PrintWriter(client.getOutputStream(), true);
+        out.println(Protocol.ERROR_NOT_ENOUGH_DSTORES_TOKEN);
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+      return;
+    }
+
     synchronized (fileIndexLock) {
       if (!fileIndex.containsKey(fileName)) {
         try {
@@ -429,7 +460,7 @@ public class Controller {
     CountDownLatch latch = new CountDownLatch(dstores);
     boolean isComplete = false;
     synchronized (removeCountdownLock) {
-        removeCountdown.put(fileName, latch);
+      removeCountdown.put(fileName, latch);
     }
     try {
       isComplete = latch.await(timeout, TimeUnit.MILLISECONDS);
@@ -515,18 +546,6 @@ public class Controller {
                     String line;
                     while ((line = in.readLine()) != null) {
                       String[] args = line.split(" ");
-
-                      int dstores;
-                      synchronized (storeIndexLock) {
-                        dstores = storeIndex.size();
-                      }
-                      if (dstores == 0) {
-                        log.error("No dstore joined");
-                        PrintWriter out = new PrintWriter(client.getOutputStream(), true);
-                        out.println(Protocol.ERROR_NOT_ENOUGH_DSTORES_TOKEN);
-                        return;
-                      }
-
                       switch (args[0]) {
                         case Protocol.JOIN_TOKEN -> storeJoin(args[1], client);
                         case Protocol.LIST_TOKEN -> listFiles(client);
