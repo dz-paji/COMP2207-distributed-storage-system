@@ -5,14 +5,14 @@ import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 public class Controller {
-  private int port;
   private final int replicFactor;
   private final int timeout;
   private final int rebalance;
-  private Socket client;
   private final ScreenLogger log;
   private final HashMap<String, Socket> storeIndex;
   private final Object storeIndexLock;
@@ -26,13 +26,14 @@ public class Controller {
   private final Object fileLoadLock;
   private LinkedHashMap<String, Integer> storeFileCount;
   private final Object storeFileCountLock;
+  private final HashMap<String, CountDownLatch> fileCountdown;
+  private final Object fileCountdownLock;
   public ServerSocket ss;
 
   public Controller(int replicFactor, int timeout, int rebalance, int port) {
     this.replicFactor = replicFactor;
     this.timeout = timeout;
     this.rebalance = rebalance;
-    this.port = port;
     this.log = new ScreenLogger("Controller");
     this.storeIndex = new HashMap<>();
     this.storeIndexLock = new Object();
@@ -46,6 +47,8 @@ public class Controller {
     this.fileLoadLock = new Object();
     this.storeFileCount = new LinkedHashMap<>();
     this.storeFileCountLock = new Object();
+    this.fileCountdown = new HashMap<>();
+    this.fileCountdownLock = new Object();
     try {
       ss = new ServerSocket(port);
       //            ss.setSoTimeout(timeout);
@@ -78,6 +81,18 @@ public class Controller {
    */
   public void listFiles(Socket client) {
     log.info("LIST request received");
+    synchronized (storeIndexLock) {
+      if (storeIndex.size() == 0) {
+        log.error("No stores joined but LIST request received");
+        try {
+          PrintWriter out = new PrintWriter(client.getOutputStream(), true);
+          out.println(Protocol.ERROR_NOT_ENOUGH_DSTORES_TOKEN);
+        } catch (IOException e) {
+          e.printStackTrace();
+        }
+        return;
+      }
+    }
     try {
       PrintWriter out = new PrintWriter(client.getOutputStream(), true);
       StringBuilder outLine = new StringBuilder(" ");
@@ -145,16 +160,16 @@ public class Controller {
     }
 
     sortStoreFileCount();
-    ArrayList<String> portsArray = null;
+    ArrayList<String> portsArray;
     synchronized (storeFileCountLock) {
       portsArray = new ArrayList<>(storeFileCount.keySet());
     }
 
-    String ports = "";
+    StringBuilder ports = new StringBuilder();
     for (int i = 0; i < replicFactor; i++) {
-      ports += portsArray.get(i) + " ";
+      ports.append(portsArray.get(i)).append(" ");
     }
-    if (ports.length() > 0) ports = ports.substring(0, ports.length() - 1);
+    if (ports.length() > 0) ports = new StringBuilder(ports.substring(0, ports.length() - 1));
     try {
       PrintWriter out = new PrintWriter(client.getOutputStream(), true);
       out.println(Protocol.STORE_TO_TOKEN + " " + ports);
@@ -162,8 +177,27 @@ public class Controller {
       e.printStackTrace();
     }
 
-    synchronized (fileStoreLock) {
-      fileStoreLookup.putIfAbsent(file, fileSize + " " + ports);
+    // timeout for store ack
+    CountDownLatch latch = new CountDownLatch(replicFactor);
+    boolean isComplete = false;
+    synchronized (fileCountdownLock) {
+      fileCountdown.put(file, latch);
+    }
+    try {
+      isComplete = latch.await(timeout, TimeUnit.MILLISECONDS);
+    } catch (InterruptedException e) {
+      log.error("Latch interrupted while waiting for dstore acks.");
+    }
+    if (isComplete) {
+      log.debug("All dstore acks received for " + file);
+      synchronized (fileStoreLock) {
+        fileStoreLookup.putIfAbsent(file, fileSize + " " + ports);
+      }
+    } else {
+      log.warn("Timeout while waiting for dstore acks of " + file);
+        synchronized (fileIndexLock) {
+            fileIndex.remove(file);
+        }
     }
   }
 
@@ -174,9 +208,11 @@ public class Controller {
               .sorted(Map.Entry.comparingByValue())
               .collect(
                   Collectors.toMap(
-                      Map.Entry::getKey, Map.Entry::getValue, (oldVal, newVal) -> oldVal, LinkedHashMap::new));
+                      Map.Entry::getKey,
+                      Map.Entry::getValue,
+                      (oldVal, newVal) -> oldVal,
+                      LinkedHashMap::new));
     }
-
   }
 
   private Boolean checkExistedFile(Socket client, boolean b, String file) {
@@ -196,9 +232,11 @@ public class Controller {
   }
 
   private void storeAck(String fileName) {
-    Boolean stored = false;
+    boolean stored = false;
+    boolean doCountdown = false;
     synchronized (fileIndexLock) {
       if (fileIndex.containsKey(fileName) && fileIndex.get(fileName).startsWith("Storing")) {
+        doCountdown = true;
         String[] status = fileIndex.get(fileName).split(" ");
         int i = Integer.parseInt(status[1]);
         int r = Integer.parseInt(status[2]);
@@ -216,10 +254,19 @@ public class Controller {
       }
     }
 
+    if (doCountdown) {
+      CountDownLatch latch;
+      synchronized (fileCountdownLock) {
+        latch = fileCountdown.get(fileName);
+      }
+      latch.countDown();
+    }
+
     if (stored) {
       synchronized (fileClientLock) {
-        Socket clientSocket = fileClientIndex.get(fileName);
         try {
+          Socket clientSocket = fileClientIndex.get(fileName);
+
           PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true);
           out.println(Protocol.STORE_COMPLETE_TOKEN);
 
@@ -248,7 +295,7 @@ public class Controller {
 
     int i = 0;
     int r = numDstoresHasFile(fileName);
-    int fileSize = 0;
+    int fileSize;
     List<String> dstores = dstoresHasFile(fileName);
 
     synchronized (fileStoreLock) {
@@ -260,7 +307,15 @@ public class Controller {
       if (fileIndex.get(fileName).startsWith("Stored")) {
         isStored = true;
       } else {
-        log.error(fileName + ": Invalid state for loading");
+        try {
+          PrintWriter out = new PrintWriter(client.getOutputStream(), true);
+          out.println(Protocol.ERROR_FILE_ALREADY_EXISTS_TOKEN);
+
+        } catch (IOException e) {
+          e.printStackTrace();
+        }
+        log.error(fileName + ": Invalid state for loading. Sent file not found exception");
+        return;
       }
     }
 
@@ -270,7 +325,7 @@ public class Controller {
           i = Integer.parseInt(fileLoadLookup.get(fileName).split(" ")[1]);
           i++;
         } else {
-          fileLoadLookup.putIfAbsent(fileName, "Loading 0 " + r);
+          fileLoadLookup.put(fileName, "Loading 0 " + r);
         }
 
         if (i == r) { // check if there's more dstore to try
@@ -292,6 +347,7 @@ public class Controller {
             e.printStackTrace();
           }
           log.info(fileName + ": " + Protocol.LOAD_FROM_TOKEN + " token sent back");
+          log.debug("whole token is " + Protocol.LOAD_FROM_TOKEN + " " + dstores.get(i) + " " + fileSize);
         }
       }
     }
@@ -346,7 +402,7 @@ public class Controller {
   }
 
   private int numDstoresHasFile(String fileName) {
-    int dstores = 0;
+    int dstores;
     synchronized (fileStoreLock) {
       dstores = fileStoreLookup.get(fileName).split(" ").length - 1;
     }
@@ -354,9 +410,10 @@ public class Controller {
   }
 
   private List<String> dstoresHasFile(String fileName) {
-    List<String> dstorePorts = new LinkedList<>();
+    List<String> dstorePorts;
     synchronized (fileStoreLock) {
-      dstorePorts.addAll(Arrays.stream(fileStoreLookup.get(fileName).split(" ")).toList());
+      dstorePorts =
+          new LinkedList<>(Arrays.stream(fileStoreLookup.get(fileName).split(" ")).toList());
     }
     dstorePorts.remove(0);
     return dstorePorts;
@@ -389,7 +446,9 @@ public class Controller {
       }
       log.info(fileName + ": Removed");
     } else {
-      fileIndex.replace(fileName, "Removing " + i + " " + r);
+      synchronized (fileIndexLock) {
+        fileIndex.replace(fileName, "Removing " + i + " " + r);
+      }
       log.info(fileName + ": " + i + "/" + r + " ACKs received");
     }
   }
@@ -406,8 +465,7 @@ public class Controller {
                   try {
                     String line;
                     while ((line = in.readLine()) != null) {
-                      String finalLine = line;
-                      String[] args = finalLine.split(" ");
+                      String[] args = line.split(" ");
                       switch (args[0]) {
                         case Protocol.JOIN_TOKEN -> storeJoin(args[1], client);
                         case Protocol.LIST_TOKEN -> listFiles(client);
@@ -419,7 +477,7 @@ public class Controller {
                         case Protocol.REMOVE_ACK_TOKEN -> dstoreRmAck(args[1]);
                         default -> {
                           log.error("Invalid Token");
-                          log.error(finalLine);
+                          log.error(line);
                         }
                       }
                     }
@@ -439,15 +497,6 @@ public class Controller {
     int replicFactor = Integer.parseInt(args[1]);
     int timeout = Integer.parseInt(args[2]);
     int rebalance = Integer.parseInt(args[3]);
-    ServerSocket ss = null;
-    HashMap<String, String> fileIndex = new HashMap<>();
-    HashMap<String, String> fileStoreLookup = new HashMap<>();
-    HashMap<String, Socket> storeIndex = new HashMap<>();
-    HashMap<String, Socket> fileClientIndex = new HashMap<>();
-    Object fileIndexLock = new Object();
-    Object fileStoreLock = new Object();
-    Object storeIndexLock = new Object();
-    Object fileClientLock = new Object();
     Controller ctler = new Controller(replicFactor, timeout, rebalance, port);
     ctler.start();
   }

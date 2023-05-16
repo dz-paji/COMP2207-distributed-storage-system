@@ -1,8 +1,5 @@
 import java.io.*;
-import java.net.InetAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.SocketException;
+import java.net.*;
 
 public class Dstore {
   private final int port;
@@ -75,6 +72,8 @@ public class Dstore {
                         }
                       }
                     }
+                  } catch (SocketTimeoutException e) {
+                    log.error("Client r/w timed out on port: " + client.getPort());
                   } catch (SocketException e) {
                     if (e.getMessage().equals("Socket closed")) {
                       log.info("Client disconnected");
@@ -128,6 +127,8 @@ public class Dstore {
       fIn.close();
       client.getOutputStream().write(buffer);
       log.info(fileName + ": sent to client");
+    } catch (SocketTimeoutException e) {
+        log.error("Client r/w timed out during load operation");
     } catch (IOException e) {
       e.printStackTrace();
     }
@@ -150,8 +151,10 @@ public class Dstore {
       PrintWriter outS = new PrintWriter(controller.getOutputStream(), true);
       outS.println(Protocol.STORE_ACK_TOKEN + " " + fileName);
       log.info(fileName + ": stored. Notify controller");
+    } catch (SocketTimeoutException e) {
+      log.error("Client r/w timed out during store operation");
     } catch (IOException e) {
-        e.printStackTrace();
+      e.printStackTrace();
     }
   }
 
