@@ -28,6 +28,8 @@ public class Controller {
   private final Object storeFileCountLock;
   private final HashMap<String, CountDownLatch> fileCountdown;
   private final Object fileCountdownLock;
+  private final HashMap<String, CountDownLatch> removeCountdown;
+    private final Object removeCountdownLock;
   public ServerSocket ss;
 
   public Controller(int replicFactor, int timeout, int rebalance, int port) {
@@ -49,6 +51,8 @@ public class Controller {
     this.storeFileCountLock = new Object();
     this.fileCountdown = new HashMap<>();
     this.fileCountdownLock = new Object();
+    this.removeCountdown = new HashMap<>();
+    this.removeCountdownLock = new Object();
     try {
       ss = new ServerSocket(port);
       //            ss.setSoTimeout(timeout);
@@ -422,6 +426,22 @@ public class Controller {
         }
       }
     }
+    CountDownLatch latch = new CountDownLatch(dstores);
+    boolean isComplete = false;
+    synchronized (removeCountdownLock) {
+        removeCountdown.put(fileName, latch);
+    }
+    try {
+      isComplete = latch.await(timeout, TimeUnit.MILLISECONDS);
+    } catch (InterruptedException e) {
+      log.error("Latch interrupted while waiting for REMOVE ack");
+    }
+    if (!isComplete) {
+      log.error(fileName + ": REMOVE timed out");
+      synchronized (fileClientIndex) {
+        fileClientIndex.remove(fileName);
+      }
+    }
   }
 
   private int numDstoresHasFile(String fileName) {
@@ -455,6 +475,9 @@ public class Controller {
     int r = Integer.parseInt(status[2]);
     i++;
     if (i == r) {
+      synchronized (removeCountdownLock) {
+        removeCountdown.get(fileName).countDown();
+      }
       fileIndex.remove(fileName);
       synchronized (fileClientIndex) {
         // Notify client
@@ -469,6 +492,9 @@ public class Controller {
       }
       log.info(fileName + ": Removed");
     } else {
+      synchronized (removeCountdownLock) {
+        removeCountdown.get(fileName).countDown();
+      }
       synchronized (fileIndexLock) {
         fileIndex.replace(fileName, "Removing " + i + " " + r);
       }
@@ -489,6 +515,18 @@ public class Controller {
                     String line;
                     while ((line = in.readLine()) != null) {
                       String[] args = line.split(" ");
+
+                      int dstores;
+                      synchronized (storeIndexLock) {
+                        dstores = storeIndex.size();
+                      }
+                      if (dstores == 0) {
+                        log.error("No dstore joined");
+                        PrintWriter out = new PrintWriter(client.getOutputStream(), true);
+                        out.println(Protocol.ERROR_NOT_ENOUGH_DSTORES_TOKEN);
+                        return;
+                      }
+
                       switch (args[0]) {
                         case Protocol.JOIN_TOKEN -> storeJoin(args[1], client);
                         case Protocol.LIST_TOKEN -> listFiles(client);

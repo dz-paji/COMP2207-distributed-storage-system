@@ -96,6 +96,12 @@ public class Dstore {
     File file = new File(folder + "/" + fileName);
     if (!file.exists()) {
       log.error("File does not exist");
+      try {
+        PrintWriter out = new PrintWriter(controller.getOutputStream(), true);
+        out.println(Protocol.ERROR_FILE_DOES_NOT_EXIST_TOKEN + " " + fileName);
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
       return;
     }
     if (file.delete()) {
