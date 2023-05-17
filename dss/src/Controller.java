@@ -22,7 +22,7 @@ public class Controller {
   private final Object fileClientLock;
   private final HashMap<String, String> fileStoreLookup;
   private final Object fileStoreLock;
-  private final HashMap<String, String> fileLoadLookup;
+  private final HashMap<String, HashMap<Integer, String>> fileLoadLookup;
   private final Object fileLoadLock;
   private LinkedHashMap<String, Integer> storeFileCount;
   private final Object storeFileCountLock;
@@ -282,10 +282,13 @@ public class Controller {
   }
 
   private void clientLoad(String fileName, Socket client, boolean isFresh) {
+      int clientPort = client.getPort();
     if (isFresh) {
       log.info("LOAD request received for " + fileName);
       synchronized (fileLoadLock) {
-        fileLoadLookup.remove(fileName);
+          if (fileLoadLookup.containsKey(fileName)) {
+              fileLoadLookup.get(fileName).remove(clientPort);
+          }
       }
     } else {
       log.info("RELOAD request received for " + fileName);
@@ -328,7 +331,7 @@ public class Controller {
       fileSize = Integer.parseInt(fileStoreLookup.get(fileName).split(" ")[0]);
     }
 
-    boolean isStored = false;
+    boolean isStored;
     synchronized (fileIndexLock) {
       if (fileIndex.get(fileName).startsWith("Stored")) {
         isStored = true;
@@ -347,18 +350,18 @@ public class Controller {
 
     if (isStored) {
       synchronized (fileLoadLock) {
-        if (fileLoadLookup.containsKey(fileName)) {
-          i = Integer.parseInt(fileLoadLookup.get(fileName).split(" ")[1]);
+        if (fileLoadLookup.containsKey(fileName) && fileLoadLookup.get(fileName).containsKey(clientPort)) {
+          i = Integer.parseInt(fileLoadLookup.get(fileName).get(clientPort).split(" ")[1]);
           i++;
         } else {
-          fileLoadLookup.put(fileName, "Loading 0 " + r);
+          fileLoadLookup.put(fileName, new HashMap<>(Map.of(clientPort, "Loading 0 " + r)));
         }
 
         if (i == r) { // check if there's more dstore to try
           // no more dstore to try
 
           if (isFresh) { // this is a fresh serve
-            fileLoadLookup.replace(fileName, "Loading 1 " + r);
+            fileLoadLookup.get(fileName).replace(clientPort, "Loading 1 " + r);
             try {
               PrintWriter out = new PrintWriter(client.getOutputStream(), true);
               out.println(Protocol.LOAD_FROM_TOKEN + " " + dstores.get(0) + " " + fileSize);
@@ -376,11 +379,11 @@ public class Controller {
             } catch (IOException e) {
               e.printStackTrace();
             }
-            fileLoadLookup.remove(fileName);
+            fileLoadLookup.get(fileName).remove(clientPort);
             log.error(fileName + ": Load failed. No more dstore to try");
           }
         } else {
-          fileLoadLookup.replace(fileName, "Loading " + i + " " + r);
+          fileLoadLookup.get(fileName).replace(clientPort, "Loading " + i + " " + r);
           try {
             PrintWriter out = new PrintWriter(client.getOutputStream(), true);
             out.println(Protocol.LOAD_FROM_TOKEN + " " + dstores.get(i) + " " + fileSize);

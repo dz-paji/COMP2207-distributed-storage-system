@@ -79,22 +79,6 @@ public class ClientMain {
 				try { client.disconnect(); } catch(Exception e) { e.printStackTrace(); }
 		}
 	}
-
-	public static void testClient3(int cport, int timeout, File downloadFolder, File uploadFolder) {
-		Client client = null;
-		try {
-			client = new Client(cport, timeout, Logger.LoggingType.ON_FILE_AND_TERMINAL);
-			try { client.connect(); } catch(IOException e) { e.printStackTrace(); return; }
-
-			File fileList[] = uploadFolder.listFiles();
-			if (fileList.length > 0) {
-				try { client.store(fileList[0]); } catch(IOException e) { e.printStackTrace(); }
-			}
-			if (fileList.length > 1) {
-				try { client.store(fileList[1]); } catch(IOException e) { e.printStackTrace(); }
-			}
-		}
-	}
 	
 	public static void testClient(int cport, int timeout, File downloadFolder, File uploadFolder) {
 		Client client = null;
