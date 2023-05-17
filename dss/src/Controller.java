@@ -526,11 +526,11 @@ public class Controller {
       }
       log.info(fileName + ": Removed");
     } else {
-      synchronized (removeCountdownLock) {
-        removeCountdown.get(fileName).countDown();
-      }
       synchronized (fileIndexLock) {
         fileIndex.replace(fileName, "Removing " + i + " " + r);
+      }
+      synchronized (removeCountdownLock) {
+        removeCountdown.get(fileName).countDown();
       }
       log.info(fileName + ": " + i + "/" + r + " ACKs received");
     }
